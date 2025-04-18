@@ -31,8 +31,8 @@ MODEL_NAME = "neuralmind/bert-base-portuguese-cased"  # Modelo pré-treinado em 
 OUTPUT_DIR = "receipt_ner_model"
 MAX_LENGTH = 512
 BATCH_SIZE = 8
-LEARNING_RATE = 2e-5
-NUM_EPOCHS = 10
+LEARNING_RATE = 5e-5
+NUM_EPOCHS = 25
 SEED = 42
 
 # Defina as etiquetas para extrair das notas fiscais
@@ -313,31 +313,29 @@ def tokenize_and_align_labels(examples, tokenizer):
         truncation=True,
         is_split_into_words=True,
         max_length=MAX_LENGTH,
-        padding="max_length"
+        padding="max_length"  # Garantir padding consistente
     )
     
     labels = []
-    
     for i, label in enumerate(examples["ner_tags"]):
         word_ids = tokenized_inputs.word_ids(batch_index=i)
         previous_word_idx = None
         label_ids = []
         
         for word_idx in word_ids:
+            # Corrigir alinhamento de subpalavras
             if word_idx is None:
-                label_ids.append(-100)  # Ignorar tokens especiais na perda
+                label_ids.append(-100)
             elif word_idx != previous_word_idx:
                 label_ids.append(label[word_idx])
             else:
-                # Para lidar com tokenização de subpalavras
-                label_ids.append(label[word_idx] if label[word_idx] % 2 == 0 else label[word_idx])
-            
+                label_ids.append(-100)  # Ignorar subpalavras
+                
             previous_word_idx = word_idx
         
         labels.append(label_ids)
     
     tokenized_inputs["labels"] = labels
-    
     return tokenized_inputs
 
 def train_model(dataset_dict):
@@ -364,17 +362,17 @@ def train_model(dataset_dict):
     
     # Define os argumentos de treinamento
     training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
-        learning_rate=LEARNING_RATE,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        num_train_epochs=NUM_EPOCHS,
-        weight_decay=0.01,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        push_to_hub=False,
-        report_to="none"
+    output_dir=OUTPUT_DIR,
+    learning_rate=LEARNING_RATE,
+    per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=BATCH_SIZE,
+    num_train_epochs=NUM_EPOCHS,
+    weight_decay=0.01,
+    eval_strategy="epoch",  # Nome corrigido
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    push_to_hub=False,
+    report_to="none"
     )
     
     # Cria o treinador
@@ -394,7 +392,7 @@ def train_model(dataset_dict):
     trainer.save_model(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
     
-    return model, tokenizer, trainer
+    return model, tokenizer, trainer, tokenized_datasets
 
 def evaluate_model(model, tokenizer, test_dataset):
     """
@@ -433,9 +431,12 @@ def extract_entities_from_text(text, model, tokenizer):
     Extrai entidades de um texto usando o modelo treinado e formata o resultado
     no formato JSON específico solicitado
     """
+
+    device = torch.device("cpu")
+    model.to(device)
     # Tokeniza o texto
     tokens = text.split()
-    inputs = tokenizer(tokens, truncation=True, is_split_into_words=True, return_tensors="pt", padding=True)
+    inputs = tokenizer(tokens, truncation=True, is_split_into_words=True, return_tensors="pt", padding=True).to(device)
     
     # Faz a previsão
     with torch.no_grad():
@@ -561,11 +562,11 @@ def main():
     print(f"Conjunto de teste: {len(dataset_dict['test'])} exemplos")
     
     print("\nTreinando o modelo...")
-    model, tokenizer, trainer = train_model(dataset_dict)
+    model, tokenizer, trainer, tokenized_datasets = train_model(dataset_dict)
     print(f"Modelo treinado e salvo em {OUTPUT_DIR}")
     
     print("\nAvaliando o modelo...")
-    evaluate_model(model, tokenizer, dataset_dict["test"])
+    evaluate_model(model, tokenizer, tokenized_datasets["test"])
     
     print("\nExemplo de extração de entidades:")
     sample_text = texts[0]
